@@ -1,0 +1,46 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.crt
+*.conf
+!*.example.conf
+
+# Infrastructure state
+*.tfstate
+*.tfstate.*
+.terraform/
+deploy/secrets/*
+!deploy/secrets/.gitkeep
+
+# Build output and local tools
+bin/
+build/
+dist/
+.idea/
+.vscode/
+.gradle/
+local.properties
+**/build/
+*.apk
+*.aab
+*.ipa
+*.app/
+*.xcarchive/
+obj/
+TestResults/
+DerivedData/
+node_modules/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Generated test evidence
+tests/e2e/results/*
+!tests/e2e/results/.gitkeep

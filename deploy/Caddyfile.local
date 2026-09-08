@@ -1,0 +1,12 @@
+{
+    default_sni 10.0.2.2
+    auto_https disable_redirects
+    servers {
+        protocols h1
+    }
+}
+
+https://10.0.2.2:8443 {
+    tls internal
+    reverse_proxy api:8080
+}

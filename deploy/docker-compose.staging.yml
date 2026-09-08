@@ -1,0 +1,162 @@
+services:
+  db:
+    entrypoint: ["/usr/local/bin/personalvpn-postgres-entrypoint.sh"]
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: personalvpn
+      POSTGRES_USER: personalvpn
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/postgres_server_cert.pem
+      - -c
+      - ssl_key_file=/run/secrets/postgres_server_key.pem
+      - -c
+      - ssl_ca_file=/run/secrets/postgres_ca.pem
+    secrets:
+      - source: postgres_password
+        target: /run/secrets/postgres_password
+      - source: postgres_server_cert
+        target: /run/secrets/postgres_server_cert.pem
+        uid: "999"
+        gid: "999"
+        mode: 0444
+      - source: postgres_server_key
+        target: /run/secrets/postgres_server_key.pem
+        uid: "999"
+        gid: "999"
+        mode: 0400
+      - source: postgres_ca
+        target: /run/secrets/postgres_ca.pem
+        uid: "999"
+        gid: "999"
+        mode: 0444
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./postgres-entrypoint.sh:/usr/local/bin/personalvpn-postgres-entrypoint.sh:ro
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U personalvpn -d personalvpn"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: ../services/api
+      target: api
+    restart: unless-stopped
+    environment:
+      APP_ENV: staging
+      API_LISTEN_ADDRESS: :8080
+      DATABASE_URL: postgres://personalvpn@db:5432/personalvpn?sslmode=verify-full&sslrootcert=/run/secrets/postgres_ca.pem
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - source: postgres_ca
+        target: /run/secrets/postgres_ca.pem
+      - source: postgres_password
+        target: /run/secrets/postgres_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [private]
+    # Publish through an approved HTTPS reverse proxy; do not expose directly.
+
+  local-proxy:
+    image: caddy:2.9.1-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
+    profiles: [local-proxy]
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_started
+    networks: [private, public]
+
+  reconciler:
+    build:
+      context: ../services/api
+      target: reconciler
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://personalvpn@db:5432/personalvpn?sslmode=verify-full&sslrootcert=/run/secrets/postgres_ca.pem
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      SNAPSHOT_SIGNING_KEY_FILE: /run/secrets/snapshot_signing_key
+      RECONCILE_INTERVAL: 15s
+    secrets:
+      - source: snapshot_signing_key
+        target: /run/secrets/snapshot_signing_key
+      - source: postgres_ca
+        target: /run/secrets/postgres_ca.pem
+      - source: postgres_password
+        target: /run/secrets/postgres_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [private]
+
+  migrate:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    restart: "no"
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: personalvpn
+      PGUSER: personalvpn
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /run/secrets/postgres_ca.pem
+    secrets:
+      - source: postgres_password
+        target: /run/secrets/postgres_password
+      - source: postgres_ca
+        target: /run/secrets/postgres_ca.pem
+    command:
+      - sh
+      - -ec
+      - >-
+        export PGPASSWORD="$$(cat /run/secrets/postgres_password)";
+        psql -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())";
+        if psql -Atqc "SELECT 1 FROM schema_migrations WHERE version = '0001_initial'" | grep -q 1; then
+          echo 'migration 0001_initial already applied';
+        else
+          psql -v ON_ERROR_STOP=1 -f /migrations/0001_initial.sql;
+          psql -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations (version) VALUES ('0001_initial')";
+        fi
+    volumes:
+      - ../services/api/migrations/0001_initial.sql:/migrations/0001_initial.sql:ro
+      - ./seed-local.sql:/seed/seed-local.sql:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [private]
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  snapshot_signing_key:
+    file: ./secrets/snapshot_signing_key
+  postgres_server_cert:
+    file: ./secrets/postgres_server_cert.pem
+  postgres_server_key:
+    file: ./secrets/postgres_server_key.pem
+  postgres_ca:
+    file: ./secrets/postgres_ca.pem
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  private:
+    internal: true
+  public:
+    driver: bridge

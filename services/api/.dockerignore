@@ -1,0 +1,17 @@
+# Keep build context limited to the Go service and never send secrets.
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/*.conf
+**/bin/
+**/build/
+**/dist/
+**/.git/
+**/TestResults/
+**/DerivedData/
+**/*.apk
+**/*.aab
+**/*.ipa

@@ -1,0 +1,17 @@
+# Review interface names and pools before applying on a disposable Linux VM.
+# Default-deny policy; do not apply on the Windows host or a shared server.
+table inet personalvpn {
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    ct state established,related accept
+    iifname "wg0" oifname "WAN_IFACE" accept
+    iifname "WAN_IFACE" oifname "wg0" ct state established,related accept
+  }
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iifname "WAN_IFACE" udp dport 51820 accept
+    ct state established,related accept
+    iifname "wg0" udp dport 53 accept
+  }
+  chain output { type filter hook output priority filter; policy accept; }
+}

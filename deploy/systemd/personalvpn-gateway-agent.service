@@ -1,0 +1,30 @@
+[Unit]
+Description=PersonalVPN WireGuard gateway agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=personalvpn-agent
+Group=personalvpn-agent
+ExecStart=/opt/personalvpn/personalvpn-gateway-agent
+EnvironmentFile=/etc/personalvpn/gateway-agent.env
+Environment=PATH=/usr/bin:/bin
+Restart=on-failure
+RestartSec=5s
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/personalvpn
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,514 @@
+openapi: 3.1.0
+info:
+  title: PersonalVPN Control API
+  version: 0.1.0
+  description: >-
+    Initial control-plane contract. Clients generate and retain WireGuard private
+    keys locally; this API accepts public keys only.
+servers:
+  - url: https://api.example.invalid/v1
+    description: Placeholder; never use as a production endpoint.
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /ready:
+    get:
+      operationId: ready
+      security: []
+      responses:
+        "200":
+          description: Database is reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ready
+        "503":
+          description: Database is unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /auth/register:
+    post:
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [userId]
+                properties:
+                  userId:
+                    type: string
+                    format: uuid
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Account already exists.
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthCredentials"
+      responses:
+        "200":
+          description: Access and refresh tokens issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/refresh:
+    post:
+      operationId: refresh
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              additionalProperties: false
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 48
+      responses:
+        "200":
+          description: Rotated token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204":
+          description: Session family revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /health:
+    get:
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Service is ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /regions:
+    get:
+      operationId: listRegions
+      responses:
+        "200":
+          description: Available regions, without internal gateway addresses.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Region"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /devices:
+    get:
+      operationId: listDevices
+      responses:
+        "200":
+          description: Devices owned by the authenticated user.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: registerDevice
+      description: Registers a client-generated WireGuard public key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDeviceRequest"
+      responses:
+        "201":
+          description: Device registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Public key is already registered.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /devices/{deviceId}:
+    delete:
+      operationId: revokeDevice
+      description: Revokes the device and removes all associated peers.
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "204":
+          description: Revocation accepted and is being reconciled.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /devices/{deviceId}/configuration:
+    post:
+      operationId: createTunnelConfiguration
+      description: >-
+        Allocates addresses and returns public tunnel parameters. The response
+        never contains the client's private key.
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [regionId]
+              properties:
+                regionId:
+                  type: string
+                  pattern: "^[a-z0-9-]{2,32}$"
+      responses:
+        "200":
+          description: Existing idempotent allocation returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TunnelConfiguration"
+        "201":
+          description: New allocation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TunnelConfiguration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /agent/gateways/{gatewayId}/snapshots/next:
+    get:
+      operationId: claimGatewaySnapshot
+      security:
+        - gatewayMTLS: []
+      parameters:
+        - $ref: "#/components/parameters/GatewayId"
+      responses:
+        "200":
+          description: Claimed snapshot delivery.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotDelivery"
+        "204":
+          description: No snapshot is currently available.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /agent/gateways/{gatewayId}/snapshots/{deliveryId}/ack:
+    post:
+      operationId: acknowledgeGatewaySnapshot
+      security:
+        - gatewayMTLS: []
+      parameters:
+        - $ref: "#/components/parameters/GatewayId"
+        - $ref: "#/components/parameters/DeliveryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation]
+              properties:
+                generation: {type: integer, format: int64, minimum: 1}
+      responses:
+        "204": {description: Snapshot acknowledged.}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /agent/gateways/{gatewayId}/snapshots/{deliveryId}/retry:
+    post:
+      operationId: retryGatewaySnapshot
+      security:
+        - gatewayMTLS: []
+      parameters:
+        - $ref: "#/components/parameters/GatewayId"
+        - $ref: "#/components/parameters/DeliveryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retryAt, reason]
+              properties:
+                retryAt: {type: string, format: date-time}
+                reason: {type: string, maxLength: 512}
+      responses:
+        "204": {description: Retry scheduled.}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    gatewayMTLS:
+      type: mutualTLS
+  parameters:
+    GatewayId:
+      name: gatewayId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    DeliveryId:
+      name: deliveryId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Authentication is missing, expired, or invalid.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Resource does not exist or is not owned by this user.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    AuthCredentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 12
+          maxLength: 1024
+    TokenPair:
+      type: object
+      additionalProperties: false
+      required: [accessToken, refreshToken, accessExpiresAt, refreshExpiresAt]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        accessExpiresAt:
+          type: string
+          format: date-time
+        refreshExpiresAt:
+          type: string
+          format: date-time
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    Region:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, available]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z0-9-]{2,32}$"
+        displayName:
+          type: string
+          maxLength: 80
+        available:
+          type: boolean
+    RegisterDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [name, platform, publicKey]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        platform:
+          type: string
+          enum: [windows, android, ios, android_tv]
+        publicKey:
+          type: string
+          description: Base64-encoded 32-byte WireGuard public key.
+          pattern: "^[A-Za-z0-9+/]{43}=$"
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, name, platform, publicKey, state, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        platform:
+          type: string
+          enum: [windows, android, ios, android_tv]
+        publicKey:
+          type: string
+        state:
+          type: string
+          enum: [active, revocation_pending, revoked]
+        createdAt:
+          type: string
+          format: date-time
+    TunnelConfiguration:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - endpoint
+        - serverPublicKey
+        - addresses
+        - dnsServers
+        - allowedIps
+        - expiresAt
+      properties:
+        assignmentId:
+          type: string
+          format: uuid
+        endpoint:
+          type: string
+          description: Hostname and UDP port, for example pt1.example.invalid:51820.
+        serverPublicKey:
+          type: string
+          pattern: "^[A-Za-z0-9+/]{43}=$"
+        addresses:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+        dnsServers:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: ip
+        allowedIps:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        persistentKeepaliveSeconds:
+          type: integer
+          minimum: 0
+          maximum: 120
+          default: 25
+        expiresAt:
+          type: string
+          format: date-time
+    SnapshotDelivery:
+      type: object
+      additionalProperties: false
+      required: [id, generation, payload, signature]
+      properties:
+        id: {type: string, format: uuid}
+        generation: {type: integer, format: int64, minimum: 1}
+        payload: {type: string, format: byte}
+        signature: {type: string, format: byte, minLength: 88, maxLength: 88}
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        traceId:
+          type: string
